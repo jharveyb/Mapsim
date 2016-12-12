@@ -15,18 +15,18 @@ original Python implementation.
 */
 
 type Hashmap struct {
-	diff, cols uint
+	diff, cols int
 	ceiling *big.Int
-	record []uint
+	record []int
 	debug bool
-	hashmap map[string]uint
+	hashmap map[string]int
 }
 
 // Calculates the total # of hashes & prints useful info.
 
-func (h Hashmap) Diagnostic() uint {
-	sum := uint(0)
-	for i := uint(0); i < h.cols; i++ {
+func (h Hashmap) Diagnostic() int {
+	sum := 0
+	for i := 0; i < h.cols; i++ {
 		sum += h.record[i]
 	}
 	if h.debug == true {
@@ -67,11 +67,11 @@ func (h Hashmap) Update() bool {
 
 // Creates a hashmap & solves, returning the total # of hashes.
 
-func Mapsim(diff uint, cols uint, debug bool) uint {
-	ceiling := new(big.Int).SetUint64(1 << diff)
+func Mapsim(diff int, cols int, debug bool) int {
+	ceiling := new(big.Int).SetUint64(1 << uint(diff))
 	hmap := Hashmap{
-	diff, cols, ceiling, make([]uint, cols),
-	debug, make(map[string]uint)}
+	diff, cols, ceiling, make([]int, cols),
+	debug, make(map[string]int)}
 	hflg := false
 	for hflg == false {
 		hflg = hmap.Update()
@@ -81,19 +81,17 @@ func Mapsim(diff uint, cols uint, debug bool) uint {
 
 // Need to write results to file vs. pipe, make concurrent
 // All command line options declared & parsed here
-
-var diff uint
-var cols uint
-var iters uint
+var diff int
+var cols int
+var iters int
 var debug bool
 
 func init() {
-	flag.UintVar(&diff, "diff", 32, "Difficulty of the PoW")
-	flag.UintVar(&cols, "cols", 3, "# of Collisions")
-	flag.UintVar(&iters, "iters", 100, "# of iterations per parameter")
+	flag.IntVar(&diff, "diff", 32, "Difficulty of the PoW")
+	flag.IntVar(&cols, "cols", 3, "# of Collisions")
+	flag.IntVar(&iters, "iters", 100, "# of iterations per parameter")
 	flag.BoolVar(&debug, "debug", false, "Sets state of printing while solving")
 	}
-
 /*
 Parses flags, & solves PHC PoW over the range specified with
 diffs & cols, running for iters # of times. Prints diffs & cols,
@@ -102,14 +100,14 @@ along with the mean, s.d., & coeff. of var.
 
 func main() {
 	flag.Parse()
-	outmap := make(map[uint][]uint)
-	for i := uint(1); i < diff+1; i++ {
-		for j := uint(2); j < cols+1; j++ {
-			key := uint(i*100 + j)
+	outmap := make(map[int][]int)
+	for i := 1; i < diff+1; i++ {
+		for j := 2; j < cols+1; j++ {
+			key := i*100 + j
 			out := 0.0
 			outcv := 0.0
-			outmap[key] = make([]uint, iters)
-			for k := uint(0); k < iters; k++ {
+			outmap[key] = make([]int, iters)
+			for k := 0; k < iters; k++ {
 				hashcount := Mapsim(i, j, debug)
 				outmap[key][k] = hashcount
 				out += float64(hashcount)
