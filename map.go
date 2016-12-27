@@ -66,16 +66,29 @@ func RandString(ceiling *big.Int) string {
 // Updates hashmap with multiple threads until solved.
 // Now only called once, so need to adjust.
 
-func (h Hashmap) Update() bool {
+func (h Hashmap) Update() {
 	entry := RandString(h.ceiling)
 	// going to do the single-threaded version first
 	// desired behavior is to set in first map,
 	// and use that entry as pointer to its most recent
 	// position
-	for i := range h.hashmap {
-		continue
+	absent := h.hashmap[0].SetIfAbsent(entry, 0)
+	if absent == false {
+		// most recent index of element
+		ind, _ := h.hashmap[0].Get(entry)
+		indint := ind.(int)
+		// watch for off-by-one mistakes
+		h.hashmap[indint].Remove(entry)
+		h.hashmap[indint+1].Set(entry, true)
+		h.hashmap[0].Set(entry, indint+1)
+		if indint == h.cols-2 {
+			if h.debug ==  true {
+				fmt.Println("Desired collisions found!")
+			}
+			// populate h.record
+			// break
+		}
 	}
-	return false
 	/*
 	Updater = func(state bool, val interface{}, inpval interface{}) (out interface{}) {
 		var outmap MapEntry
@@ -152,8 +165,7 @@ func Mapsim(diff int, cols int, debug bool) int {
 		temp := cmap.New()
 		hmap.hashmap[i] = &temp
 	}
-	hflg := false
-	hflg = hmap.Update()
+	hmap.Update()
 	return hmap.Diagnostic()
 }
 
