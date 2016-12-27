@@ -53,7 +53,6 @@ func (h Hashmap)  Diagnostic() int {
 	return sum
 }
 
-
 func RandString(ceiling *big.Int) string {
 	rint, err := rand.Int(rand.Reader, ceiling)
 	if err != nil {
@@ -67,26 +66,43 @@ func RandString(ceiling *big.Int) string {
 // Now only called once, so need to adjust.
 
 func (h Hashmap) Update() {
-	entry := RandString(h.ceiling)
 	// going to do the single-threaded version first
 	// desired behavior is to set in first map,
 	// and use that entry as pointer to its most recent
 	// position
-	absent := h.hashmap[0].SetIfAbsent(entry, 0)
-	if absent == false {
-		// most recent index of element
-		ind, _ := h.hashmap[0].Get(entry)
-		indint := ind.(int)
-		// watch for off-by-one mistakes
-		h.hashmap[indint].Remove(entry)
-		h.hashmap[indint+1].Set(entry, true)
-		h.hashmap[0].Set(entry, indint+1)
-		if indint == h.cols-2 {
-			if h.debug ==  true {
-				fmt.Println("Desired collisions found!")
+	fmt.Println("Begin Update")
+	flg := false
+	absent := false
+	entry := "test"
+	for flg == false {
+		entry = RandString(h.ceiling)
+		//fmt.Println(entry)
+		absent = h.hashmap[0].SetIfAbsent(entry, 0)
+		if absent == false {
+			ind, _ := h.hashmap[0].Get(entry)
+			indint := ind.(int)
+			h.hashmap[indint+1].Set(entry, true)
+			h.hashmap[0].Set(entry, indint+1)
+			if indint != 0 {
+				h.hashmap[indint].Remove(entry)
 			}
-			// populate h.record
-			// break
+			if indint+1 == h.cols-1 {
+				if h.debug ==  true {
+					fmt.Println("Desired collisions found!")
+				}
+				dubsum := 0
+				for i := range h.hashmap {
+					hitcount := h.hashmap[i].Count()
+					//fmt.Println(hitcount)
+					h.record[i] = hitcount
+					//fmt.Println(h.hashmap[i].Items())
+					if i != 0 {
+						dubsum += hitcount
+					}
+				}
+				h.record[0] -= dubsum
+				flg = true
+			}
 		}
 	}
 	/*
