@@ -19,26 +19,19 @@ original Python implementation.
 */
 
 type Hashmap struct {
-	diff, cols uint
+	diff, cols int
 	ceiling *big.Int
-	record cmap.ConcurrentMap
-	//record []uint
+	record []int
 	debug bool
-	hashmap cmap.ConcurrentMap
-	//hashmap map[string]uint
+	hashmap []*cmap.ConcurrentMap
 }
 
 var Updater cmap.UpsertCb
 var Recordater cmap.UpsertCb
 
-type MapEntry struct {
-	Count int
-	State bool
-}
-
 // Calculates the total # of hashes & prints useful info.
 
-func (h Hashmap)  Diagnostic() uint {
+func (h Hashmap)  Diagnostic() int {
 	sum := 0
 	/*
 	for i := uint(0); i < h.cols; i++ {
@@ -54,21 +47,36 @@ func (h Hashmap)  Diagnostic() uint {
 	if h.debug == true {
 		fmt.Println("Diff is", h.diff)
 		fmt.Println("Cols is", h.cols)
-		fmt.Println("Record is", h.record.Items())
+		fmt.Println("Record is", h.record)
 		fmt.Println("Sum is", sum)
 	}
-	return uint(sum)
+	return sum
 }
 
-// Updates hashmap & returns state of problem solving.
 
-func (h Hashmap) Update() bool {
-	rint, err := rand.Int(rand.Reader, h.ceiling)
+func RandString(ceiling *big.Int) string {
+	rint, err := rand.Int(rand.Reader, ceiling)
 	if err != nil {
 		fmt.Println("CSPRNG Error!", err)
 		// handle this error
 	}
-	entry := rint.String()
+	return rint.String()
+}
+
+// Updates hashmap with multiple threads until solved.
+// Now only called once, so need to adjust.
+
+func (h Hashmap) Update() bool {
+	entry := RandString(h.ceiling)
+	// going to do the single-threaded version first
+	// desired behavior is to set in first map,
+	// and use that entry as pointer to its most recent
+	// position
+	for i := range h.hashmap {
+		continue
+	}
+	return false
+	/*
 	Updater = func(state bool, val interface{}, inpval interface{}) (out interface{}) {
 		var outmap MapEntry
 		var valmap MapEntry
@@ -87,6 +95,8 @@ func (h Hashmap) Update() bool {
 		out = outmap
 		return out
 	}
+	*/
+	/*
 	Recordater = func(state bool, val interface{}, inpval interface{}) (out interface{}) {
 		var outmap MapEntry
 		outmap.Count = 1
@@ -96,11 +106,14 @@ func (h Hashmap) Update() bool {
 		out = outmap
 		return out
 	}
+	*/
+	/*
 	sol := h.hashmap.Upsert(entry, h.cols, Updater)
 	solmap := sol.(MapEntry)
 	if solmap.State == true {
 		return true
 	} else { return false }
+	*/
 	/*
 	else {
 		ind := solmap.Count - 1
@@ -130,30 +143,32 @@ func (h Hashmap) Update() bool {
 
 // Creates a hashmap & solves, returning the total # of hashes.
 
-func Mapsim(diff uint, cols uint, debug bool) uint {
-	ceiling := new(big.Int).SetUint64(1 << diff)
+func Mapsim(diff int, cols int, debug bool) int {
+	ceiling := new(big.Int).SetInt64(1 << uint(diff))
 	hmap := Hashmap{
-	diff, cols, ceiling, cmap.New(),
-	debug, cmap.New()} //make(map[string]uint)}
-	hflg := false
-	for hflg == false {
-		hflg = hmap.Update()
+	diff, cols, ceiling, make([]int, cols),
+	debug, make([]*cmap.ConcurrentMap, cols)}
+	for i := range hmap.hashmap {
+		temp := cmap.New()
+		hmap.hashmap[i] = &temp
 	}
+	hflg := false
+	hflg = hmap.Update()
 	return hmap.Diagnostic()
 }
 
 // Need to write results to file vs. pipe, make concurrent
 // All command line options declared & parsed here
 
-var diff uint
-var cols uint
-var iters uint
+var diff int
+var cols int
+var iters int
 var debug bool
 
 func init() {
-	flag.UintVar(&diff, "diff", 32, "Difficulty of the PoW")
-	flag.UintVar(&cols, "cols", 3, "# of Collisions")
-	flag.UintVar(&iters, "iters", 100, "# of iterations per parameter")
+	flag.IntVar(&diff, "diff", 32, "Difficulty of the PoW")
+	flag.IntVar(&cols, "cols", 3, "# of Collisions")
+	flag.IntVar(&iters, "iters", 100, "# of iterations per parameter")
 	flag.BoolVar(&debug, "debug", false, "Sets state of printing while solving")
 	}
 
@@ -166,14 +181,14 @@ along with the mean, s.d., & coeff. of var.
 func main() {
 	flag.Parse()
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	outmap := make(map[uint][]uint)
-	for i := uint(1); i < diff+1; i++ {
-		for j := uint(2); j < cols+1; j++ {
-			key := uint(i*100 + j)
+	outmap := make(map[int][]int)
+	for i := 1; i < diff+1; i++ {
+		for j := 2; j < cols+1; j++ {
+			key := i*100 + j
 			out := 0.0
 			outcv := 0.0
-			outmap[key] = make([]uint, iters)
-			for k := uint(0); k < iters; k++ {
+			outmap[key] = make([]int, iters)
+			for k := 0; k < iters; k++ {
 				hashcount := Mapsim(i, j, debug)
 				outmap[key][k] = hashcount
 				out += float64(hashcount)
