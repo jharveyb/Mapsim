@@ -6,7 +6,10 @@ import (
 	"math/big"
 	"math"
 	"flag"
+	//"github.com/losalamos/rdrand"
+	"github.com/orcaman/concurrent-map"
 	"runtime"
+	//"strconv"
 )
 
 /* 
@@ -16,27 +19,45 @@ original Python implementation.
 */
 
 type Hashmap struct {
-	diff, cols int
+	diff, cols uint
 	ceiling *big.Int
-	record []int
+	record cmap.ConcurrentMap
+	//record []uint
 	debug bool
-	hashmap map[string]int
+	hashmap cmap.ConcurrentMap
+	//hashmap map[string]uint
+}
+
+var Updater cmap.UpsertCb
+var Recordater cmap.UpsertCb
+
+type MapEntry struct {
+	Count int
+	State bool
 }
 
 // Calculates the total # of hashes & prints useful info.
 
-func (h Hashmap) Diagnostic() int {
+func (h Hashmap)  Diagnostic() uint {
 	sum := 0
-	for i := 0; i < h.cols; i++ {
-		sum += h.record[i]
+	/*
+	for i := uint(0); i < h.cols; i++ {
+		inc, ok := h.record.Get(strconv.FormatInt(int64(i), 10))
+		//fmt.Println(inc)
+		if ok != false {
+			incmap := inc.(MapEntry)
+			sum += incmap.Count
+		}
 	}
+	*/
+	sum = int(h.cols)
 	if h.debug == true {
 		fmt.Println("Diff is", h.diff)
 		fmt.Println("Cols is", h.cols)
-		fmt.Println("Record is", h.record)
+		fmt.Println("Record is", h.record.Items())
 		fmt.Println("Sum is", sum)
 	}
-	return sum
+	return uint(sum)
 }
 
 // Updates hashmap & returns state of problem solving.
@@ -48,114 +69,94 @@ func (h Hashmap) Update() bool {
 		// handle this error
 	}
 	entry := rint.String()
-	result := h.Check(entry, 1)
-	return result
-}
-
-func (h Hashmap) Check(entry string, inc int) bool {
-	fmt.Println("h", h, "entry", entry, "inc", inc)
+	Updater = func(state bool, val interface{}, inpval interface{}) (out interface{}) {
+		var outmap MapEntry
+		var valmap MapEntry
+		if state == true {
+			valmap = val.(MapEntry)
+			outmap.Count = valmap.Count + 1
+			if uint(outmap.Count) == h.cols {
+				if h.debug == true {
+					fmt.Println("Desired collisions found!")
+				}
+				outmap.State = true
+			}
+		} else {
+			outmap.Count = 1
+		}
+		out = outmap
+		return out
+	}
+	Recordater = func(state bool, val interface{}, inpval interface{}) (out interface{}) {
+		var outmap MapEntry
+		outmap.Count = 1
+		if state == true {
+			outmap.Count += inpval.(int)
+		}
+		out = outmap
+		return out
+	}
+	sol := h.hashmap.Upsert(entry, h.cols, Updater)
+	solmap := sol.(MapEntry)
+	if solmap.State == true {
+		return true
+	} else { return false }
+	/*
+	else {
+		ind := solmap.Count - 1
+		h.record.Upsert(strconv.FormatInt(int64(ind), 10), ind, Recordater)
+		return false
+	}
+	*/
+	/*
 	ind, ok := h.hashmap[entry]
 	if ok == true {
-		h.record[ind] += inc
-		h.hashmap[entry] += inc
+		h.record[ind] += 1
+		h.hashmap[entry] += 1
 		if h.hashmap[entry] == h.cols {
 			if h.debug == true {
 				fmt.Println("Desired collisions found!")
-				fmt.Println(h)
 			}
 			return true
 		}
 	}
 	if ok == false {
-		h.hashmap[entry] = inc
-		h.record[0] += inc
+		h.hashmap[entry] = 1
+		h.record[0] += 1
 	}
 	return false
-}
-
-// Given a hashmap, fills up to count and returns. Communicates about solutions and progress.
-
-func Worker(h Hashmap, count int) Hashmap {
-	fmt.Println(h)
-	hflg := false
-	for i := 0; i < count; i++ {
-		hflg = h.Update()
-		i += 1
-		if hflg == true {
-			break
-		}
-	}
-	return h
+	*/
 }
 
 // Creates a hashmap & solves, returning the total # of hashes.
 
-func Mapsim(diff int, cols int, debug bool) int {
-	ceiling := new(big.Int).SetUint64(1 << uint(diff))
-	/*
+func Mapsim(diff uint, cols uint, debug bool) uint {
+	ceiling := new(big.Int).SetUint64(1 << diff)
 	hmap := Hashmap{
-	diff, cols, ceiling, make([]int, cols),
-	debug, make(map[string]int)}
+	diff, cols, ceiling, cmap.New(),
+	debug, cmap.New()} //make(map[string]uint)}
 	hflg := false
 	for hflg == false {
 		hflg = hmap.Update()
-	}
-	return hmap.Diagnostic()
-	*/
-	hflg := false
-	count := int(1e4)
-	core := runtime.NumCPU()
-	hmap := Hashmap{
-	diff, cols, ceiling, make([]int, cols),
-	debug, make(map[string]int)}
-	cache := make([]Hashmap, core)
-	for i := 0; i < core; i++ {
-	}
-	for hflg == false {
-		for i := 0; i < core; i++ {
-			cache[i] = Worker(Hashmap{
-			diff, cols,
-			new(big.Int).SetUint64(1 << uint(diff)),
-			make([]int, cols), debug,
-			make(map[string]int)},
-			count)
-			fmt.Println(i)
-		}
-		fmt.Println("hmap", hmap)
-		for i := 0; i < core; i++ {
-			newmap := cache[i]
-			fmt.Println("newmap", newmap)
-			for key, val := range newmap.hashmap {
-				hflg = hmap.Check(key, val)
-				if hflg == true {
-					fmt.Println("Breaking merge!")
-					break
-				}
-			}
-			if hflg == true {
-				break
-			}
-			fmt.Println("hmap", hmap)
-		}
-		fmt.Println(hmap)
-
 	}
 	return hmap.Diagnostic()
 }
 
 // Need to write results to file vs. pipe, make concurrent
 // All command line options declared & parsed here
-var diff int
-var cols int
-var iters int
+
+var diff uint
+var cols uint
+var iters uint
 var debug bool
 
 func init() {
-	flag.IntVar(&diff, "diff", 32, "Difficulty of the PoW")
-	flag.IntVar(&cols, "cols", 3, "# of Collisions")
-	flag.IntVar(&iters, "iters", 100, "# of iterations per parameter")
+	flag.UintVar(&diff, "diff", 32, "Difficulty of the PoW")
+	flag.UintVar(&cols, "cols", 3, "# of Collisions")
+	flag.UintVar(&iters, "iters", 100, "# of iterations per parameter")
 	flag.BoolVar(&debug, "debug", false, "Sets state of printing while solving")
 	}
+
 /*
 Parses flags, & solves PHC PoW over the range specified with
 diffs & cols, running for iters # of times. Prints diffs & cols,
@@ -165,14 +166,14 @@ along with the mean, s.d., & coeff. of var.
 func main() {
 	flag.Parse()
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	outmap := make(map[int][]int)
-	for i := 1; i < diff+1; i++ {
-		for j := 2; j < cols+1; j++ {
-			key := i*100 + j
+	outmap := make(map[uint][]uint)
+	for i := uint(1); i < diff+1; i++ {
+		for j := uint(2); j < cols+1; j++ {
+			key := uint(i*100 + j)
 			out := 0.0
 			outcv := 0.0
-			outmap[key] = make([]int, iters)
-			for k := 0; k < iters; k++ {
+			outmap[key] = make([]uint, iters)
+			for k := uint(0); k < iters; k++ {
 				hashcount := Mapsim(i, j, debug)
 				outmap[key][k] = hashcount
 				out += float64(hashcount)
