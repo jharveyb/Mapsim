@@ -65,8 +65,7 @@ func RandString(ceiling *big.Int) string {
 // A subset of the original update function, using 
 // UpdateInfo to keep data passing clean
 
-func GoUpdate(info UpdateInfo, waiter sync.WaitGroup) {
-	defer waiter.Done()
+func GoUpdate(info UpdateInfo) {
 	var absent bool
 	var entry string
 	flg := false
@@ -76,12 +75,23 @@ func GoUpdate(info UpdateInfo, waiter sync.WaitGroup) {
 		if absent == false {
 			ind, _ := info.hashmap[0].Get(entry)
 			indint := ind.(int)
+			if indint == 0 {
+				fmt.Println("Preparing to go out of range.")
+				info.hashmap[indint+1].Set(entry, true)
+				info.hashmap[0].Set(entry, indint+1)
+				if indint != 0 {
+					info.hashmap[indint].Remove(entry)
+				}
+			}
 			if indint+1 == info.cols-1 {
 				if info.debug ==  true {
 					fmt.Println("Desired collisions found!")
 				}
 				flg = true
 			} else {
+				fmt.Println(indint)
+				fmt.Println(info)
+				fmt.Println(info.hashmap[0].Items())
 				info.hashmap[indint+1].Set(entry, true)
 				info.hashmap[0].Set(entry, indint+1)
 				if indint != 0 {
@@ -194,11 +204,15 @@ func main() {
 					goinf := UpdateInfo{
 					mappoint, hmap.debug,
 					hmap.cols, hmap.ceiling}
-					go GoUpdate(goinf, waiter)
+					go func () {
+						defer waiter.Done()
+						GoUpdate(goinf)
+					}()
 				}
-				fmt.Println("All routines made!")
 				waiter.Wait()
-				fmt.Println("All routines made!")
+				for ind, _ := range hmap.hashmap {
+					fmt.Println(hmap.hashmap[ind].Items())
+				}
 				//end
 				hashcount := hmap.Sum()
 				outmap[key][k] = hashcount
