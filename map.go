@@ -6,10 +6,13 @@ import (
 	"math/big"
 	"math"
 	"flag"
-	//"github.com/losalamos/rdrand"
 	"github.com/orcaman/concurrent-map"
 	"runtime"
-	//"strconv"
+	"sync"
+	/*
+	"strconv"
+	"github.com/losalamos/rdrand"
+	*/
 )
 
 /* 
@@ -26,12 +29,19 @@ type Hashmap struct {
 	hashmap []*cmap.ConcurrentMap
 }
 
+type UpdateInfo struct {
+	hashmap []*cmap.ConcurrentMap
+	debug bool
+	cols int
+	ceiling *big.Int
+}
+
 // Calculates the total # of hashes & prints useful info.
 
 func (h Hashmap) Diagnostic() int {
 	sum := 0
-	for _, val := range h.record {
-		sum += val
+	for ind, val := range h.record {
+		sum += val*(ind+1)
 	}
 	if h.debug == true {
 		fmt.Println("Diff is", h.diff)
@@ -51,6 +61,37 @@ func RandString(ceiling *big.Int) string {
 	return rint.String()
 }
 
+// Function for a goroutine to update the global hashmap;
+// A subset of the original update function, using 
+// UpdateInfo to keep data passing clean
+
+func GoUpdate(info UpdateInfo, waiter sync.WaitGroup) {
+	defer waiter.Done()
+	var absent bool
+	var entry string
+	flg := false
+	for flg == false {
+		entry = RandString(info.ceiling)
+		absent = info.hashmap[0].SetIfAbsent(entry, 0)
+		if absent == false {
+			ind, _ := info.hashmap[0].Get(entry)
+			indint := ind.(int)
+			if indint+1 == info.cols-1 {
+				if info.debug ==  true {
+					fmt.Println("Desired collisions found!")
+				}
+				flg = true
+			} else {
+				info.hashmap[indint+1].Set(entry, true)
+				info.hashmap[0].Set(entry, indint+1)
+				if indint != 0 {
+					info.hashmap[indint].Remove(entry)
+				}
+			}
+		}
+	}
+}
+
 // Updates hashmap with multiple threads until solved.
 // Now only called once, so need to adjust.
 
@@ -61,7 +102,7 @@ func (h Hashmap) Update() {
 	// position
 	flg := false
 	absent := false
-	entry := "test"
+	var entry string
 	for flg == false {
 		entry = RandString(h.ceiling)
 		absent = h.hashmap[0].SetIfAbsent(entry, 0)
@@ -77,15 +118,6 @@ func (h Hashmap) Update() {
 				if h.debug ==  true {
 					fmt.Println("Desired collisions found!")
 				}
-				dubsum := 0
-				for i := range h.hashmap {
-					hitcount := h.hashmap[i].Count()
-					h.record[i] = hitcount
-					if i != 0 {
-						dubsum += hitcount
-					}
-				}
-				h.record[0] -= dubsum
 				flg = true
 			}
 		}
@@ -94,7 +126,7 @@ func (h Hashmap) Update() {
 
 // Creates a hashmap & solves, returning the total # of hashes.
 
-func Mapsim(diff int, cols int, debug bool) int {
+func Mapsim(diff int, cols int, debug bool, outchan chan int) {
 	ceiling := new(big.Int).SetInt64(1 << uint(diff))
 	hmap := Hashmap{
 	diff, cols, ceiling, make([]int, cols),
@@ -103,8 +135,32 @@ func Mapsim(diff int, cols int, debug bool) int {
 		temp := cmap.New()
 		hmap.hashmap[i] = &temp
 	}
-	hmap.Update()
-	return hmap.Diagnostic()
+	var waiter sync.WaitGroup
+	for i := 0; i < runtime.NumCPU(); i++ {
+		waiter.Add(1)
+		goinf := UpdateInfo{
+		hmap.hashmap[:], hmap.debug,
+		hmap.cols, hmap.ceiling}
+		go GoUpdate(goinf, waiter)
+	}
+	fmt.Println("All threads running!")
+	waiter.Wait()
+	fmt.Println("All threads running!")
+	//hmap.Update()
+	dubsum := 0
+	for i := range hmap.hashmap {
+		curmap := hmap.hashmap[i]
+		fmt.Println("Index is", i)
+		fmt.Println(curmap.Items())
+		hitcount := curmap.Count()
+		fmt.Println(hitcount)
+		hmap.record[i] = hitcount
+		if i != 0 {
+			dubsum += hitcount
+		}
+	}
+	hmap.record[0] -= dubsum
+	outchan <- hmap.Diagnostic()
 }
 
 // Need to write results to file vs. pipe, make concurrent
@@ -139,7 +195,11 @@ func main() {
 			outcv := 0.0
 			outmap[key] = make([]int, iters)
 			for k := 0; k < iters; k++ {
-				hashcount := Mapsim(i, j, debug)
+				fmt.Println("Spinning up Mapsim!")
+				recvchan := make(chan int)
+				Mapsim(i, j, debug, recvchan)
+				hashcount := <-recvchan
+				fmt.Println("Mapsim all done!")
 				outmap[key][k] = hashcount
 				out += float64(hashcount)
 			}
