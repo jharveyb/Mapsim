@@ -126,7 +126,7 @@ func (h Hashmap) Update() {
 
 // Creates a hashmap & solves, returning the total # of hashes.
 
-func Mapsim(diff int, cols int, debug bool, outchan chan int) {
+func Hashmake(diff int, cols int, debug bool) Hashmap {
 	ceiling := new(big.Int).SetInt64(1 << uint(diff))
 	hmap := Hashmap{
 	diff, cols, ceiling, make([]int, cols),
@@ -135,32 +135,21 @@ func Mapsim(diff int, cols int, debug bool, outchan chan int) {
 		temp := cmap.New()
 		hmap.hashmap[i] = &temp
 	}
-	var waiter sync.WaitGroup
-	for i := 0; i < runtime.NumCPU(); i++ {
-		waiter.Add(1)
-		goinf := UpdateInfo{
-		hmap.hashmap[:], hmap.debug,
-		hmap.cols, hmap.ceiling}
-		go GoUpdate(goinf, waiter)
-	}
-	fmt.Println("All threads running!")
-	waiter.Wait()
-	fmt.Println("All threads running!")
-	//hmap.Update()
+	return hmap
+}
+
+func (hmap Hashmap) Sum() int {
 	dubsum := 0
 	for i := range hmap.hashmap {
 		curmap := hmap.hashmap[i]
-		fmt.Println("Index is", i)
-		fmt.Println(curmap.Items())
 		hitcount := curmap.Count()
-		fmt.Println(hitcount)
 		hmap.record[i] = hitcount
 		if i != 0 {
 			dubsum += hitcount
 		}
 	}
 	hmap.record[0] -= dubsum
-	outchan <- hmap.Diagnostic()
+	return hmap.Diagnostic()
 }
 
 // Need to write results to file vs. pipe, make concurrent
@@ -188,6 +177,7 @@ func main() {
 	flag.Parse()
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	outmap := make(map[int][]int)
+	var waiter sync.WaitGroup
 	for i := 1; i < diff+1; i++ {
 		for j := 2; j < cols+1; j++ {
 			key := i*100 + j
@@ -195,11 +185,22 @@ func main() {
 			outcv := 0.0
 			outmap[key] = make([]int, iters)
 			for k := 0; k < iters; k++ {
-				fmt.Println("Spinning up Mapsim!")
-				recvchan := make(chan int)
-				Mapsim(i, j, debug, recvchan)
-				hashcount := <-recvchan
-				fmt.Println("Mapsim all done!")
+				// move mapsim logic into main
+				hmap := Hashmake(i, j, debug)
+				waiter.Add(runtime.NumCPU())
+				for i := 0; i < runtime.NumCPU(); i++ {
+					mappoint := make([]*cmap.ConcurrentMap, len(hmap.hashmap))
+					copy(mappoint, hmap.hashmap)
+					goinf := UpdateInfo{
+					mappoint, hmap.debug,
+					hmap.cols, hmap.ceiling}
+					go GoUpdate(goinf, waiter)
+				}
+				fmt.Println("All routines made!")
+				waiter.Wait()
+				fmt.Println("All routines made!")
+				//end
+				hashcount := hmap.Sum()
 				outmap[key][k] = hashcount
 				out += float64(hashcount)
 			}
