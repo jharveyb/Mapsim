@@ -65,37 +65,53 @@ func RandString(ceiling *big.Int) string {
 // A subset of the original update function, using 
 // UpdateInfo to keep data passing clean
 
-func GoUpdate(info UpdateInfo) {
+func GoUpdate(info UpdateInfo, sigkill chan bool) {
 	var absent bool
 	var entry string
 	flg := false
-	for flg == false {
-		entry = RandString(info.ceiling)
-		absent = info.hashmap[0].SetIfAbsent(entry, 0)
-		if absent == false {
-			ind, _ := info.hashmap[0].Get(entry)
-			indint := ind.(int)
-			if indint == 0 {
-				fmt.Println("Preparing to go out of range.")
-				info.hashmap[indint+1].Set(entry, true)
-				info.hashmap[0].Set(entry, indint+1)
-				if indint != 0 {
-					info.hashmap[indint].Remove(entry)
-				}
-			}
-			if indint+1 == info.cols-1 {
-				if info.debug ==  true {
-					fmt.Println("Desired collisions found!")
-				}
-				flg = true
-			} else {
-				fmt.Println(indint)
-				fmt.Println(info)
-				fmt.Println(info.hashmap[0].Items())
-				info.hashmap[indint+1].Set(entry, true)
-				info.hashmap[0].Set(entry, indint+1)
-				if indint != 0 {
-					info.hashmap[indint].Remove(entry)
+	// end condition is flg set to true
+	// or signal on sigkill
+	for {
+		select {
+		case <-sigkill:
+			return
+		default:
+			if flg == false {
+				entry = RandString(info.ceiling)
+				absent = info.hashmap[0].SetIfAbsent(entry, 0)
+				// generate random string & check hashmap @ 0;
+				// set [entry, 0] if absent, absent false if 
+				// something already present
+				if absent == false {
+					ind, _ := info.hashmap[0].Get(entry)
+					indint := ind.(int)
+					// pull integer pointer from hashmap 0
+					// if pointer is to a solution
+					// Update maps + pointer,
+					// remove if not pointer
+					info.hashmap[indint+1].Set(entry, true)
+					// Catch out-of-bounds entries
+					if indint+1 < info.cols-1 {
+						info.hashmap[0].Set(entry, indint+1)
+					}
+					if indint != 0 {
+						info.hashmap[indint].Remove(entry)
+					}
+					if indint+1 == info.cols-1 {
+						if info.debug ==  true {
+							fmt.Println("Desired collisions found!")
+						}
+						flg = true
+						select {
+						case <- sigkill:
+							return
+						default:
+							for i := 0; i < runtime.NumCPU(); i++ {
+								sigkill <- true
+							}
+							return
+						}
+					}
 				}
 			}
 		}
@@ -195,9 +211,9 @@ func main() {
 			outcv := 0.0
 			outmap[key] = make([]int, iters)
 			for k := 0; k < iters; k++ {
-				// move mapsim logic into main
 				hmap := Hashmake(i, j, debug)
 				waiter.Add(runtime.NumCPU())
+				sigkill := make(chan bool, runtime.NumCPU()-1)
 				for i := 0; i < runtime.NumCPU(); i++ {
 					mappoint := make([]*cmap.ConcurrentMap, len(hmap.hashmap))
 					copy(mappoint, hmap.hashmap)
@@ -206,14 +222,10 @@ func main() {
 					hmap.cols, hmap.ceiling}
 					go func () {
 						defer waiter.Done()
-						GoUpdate(goinf)
+						GoUpdate(goinf, sigkill)
 					}()
 				}
 				waiter.Wait()
-				for ind, _ := range hmap.hashmap {
-					fmt.Println(hmap.hashmap[ind].Items())
-				}
-				//end
 				hashcount := hmap.Sum()
 				outmap[key][k] = hashcount
 				out += float64(hashcount)
