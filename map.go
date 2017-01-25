@@ -187,9 +187,9 @@ var iters int
 var debug bool
 
 func init() {
-	flag.IntVar(&diff, "diff", 32, "Difficulty of the PoW")
-	flag.IntVar(&cols, "cols", 3, "# of Collisions")
-	flag.IntVar(&iters, "iters", 100, "# of iterations per parameter")
+	flag.IntVar(&diff, "diff", 32, "Difficulty of the PoW (n)")
+	flag.IntVar(&cols, "cols", 3, "# of Collisions (k)")
+	flag.IntVar(&iters, "iters", 100, "# of iterations per (n, k)")
 	flag.BoolVar(&debug, "debug", false, "Sets state of printing while solving")
 	}
 
