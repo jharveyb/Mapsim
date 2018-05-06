@@ -71,7 +71,7 @@ func RandString(ceiling *big.Int) string {
 }
 
 // GoUpdate is run by a goroutine to update the shared hashmap.
-func GoUpdate(info UpdateInfo, sigkill chan bool) {
+func GoUpdate(info UpdateInfo, sigkill, sigdone chan bool) {
 	defer waiter.Done()
 	var absent bool
 	var entry string
@@ -112,9 +112,7 @@ func GoUpdate(info UpdateInfo, sigkill chan bool) {
 						flg = true
 						return
 					default:
-						for i := 0; i < runtime.NumCPU(); i++ {
-							sigkill <- true
-						}
+						sigdone <- true
 						flg = true
 						return
 					}
@@ -223,15 +221,24 @@ func main() {
 			for k := 0; k < iters; k++ {
 				hmap := Hashmake(i, j, debug)
 				waiter.Add(runtime.NumCPU())
-				sigkill := make(chan bool, runtime.NumCPU()-1)
+				sigdone := make(chan bool, runtime.NumCPU())
+				sigkill := make(chan bool, runtime.NumCPU())
 				for i := 0; i < runtime.NumCPU(); i++ {
 					mappoint := make([]*cmap.ConcurrentMap, len(hmap.hashmap))
 					copy(mappoint, hmap.hashmap)
 					goinf := UpdateInfo{
 						mappoint, hmap.debug,
 						hmap.cols, hmap.ceiling}
-					go GoUpdate(goinf, sigkill)
+					go GoUpdate(goinf, sigkill, sigdone)
 				}
+				go func() {
+					select {
+					case <-sigdone:
+						for i := 0; i < runtime.NumCPU(); i++ {
+							sigkill <- true
+						}
+					}
+				}()
 				waiter.Wait()
 				hashcount := hmap.Sum()
 				outmap[key][k] = hashcount
