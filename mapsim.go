@@ -16,19 +16,19 @@ import (
 	*/)
 
 /*
-Goal is to simulate arbitrary mashmaps, and write out
-the results for later analysis. Rewritten from my
-original Python implementation.
+Goal is to simulate arbitrary mashmaps, and write out the results for later analysis.
+Rewritten from my original Python implementation.
 */
 
 /*
 TODO
--Update CSPRNG to use AES-NI & fallback to /dev/urandom or ChaCha20 if that fails
--Refactor to remove redundant variables & function calls
+-Update RandString to use AES-NI & fallback to /dev/urandom or ChaCha20 if that fails
 -Branch and swap map for radix tree
 */
 
-// MapInstance stores a map + flags for solver settings + statistics
+// Note that the new sync.Map is not appropriate here since we're changing values frequently.
+
+// MapInstance stores an array of maps, solver settings, and an array for statistics.
 type MapInstance struct {
 	diff, cols int
 	ceiling    *big.Int
@@ -37,19 +37,25 @@ type MapInstance struct {
 	hashmap    []*cmap.ConcurrentMap
 }
 
-// UpdateInfo is passed to goroutines running GoUpdate.
-type UpdateInfo struct {
-	hashmap []*cmap.ConcurrentMap
-	debug   bool
-	cols    int
-	ceiling *big.Int
+// Sum populates the record array with statistics and calls Diagnostic.
+func (hmap MapInstance) Sum() int {
+	var entrycount int
+	for i := range hmap.hashmap {
+		entrycount = hmap.hashmap[i].Count()
+		hmap.record[i] = entrycount
+		// Must adjust for the pointers in the first map
+		if i > 0 {
+			hmap.record[0] -= entrycount
+		}
+	}
+	return hmap.Diagnostic()
 }
 
-// Diagnostic calculates the total # of hashes & prints debug info.
+// Diagnostic calculates the total # of hashes & can print more detailed statistics.
 func (hmap MapInstance) Diagnostic() int {
 	sum := 0
-	for ind, val := range hmap.record {
-		sum += val * (ind + 1)
+	for index, val := range hmap.record {
+		sum += val * (index + 1)
 	}
 	if hmap.debug == true {
 		fmt.Println("Diff is", hmap.diff)
@@ -60,7 +66,7 @@ func (hmap MapInstance) Diagnostic() int {
 	return sum
 }
 
-// RandString returns a psuedorandom string with value bounded by ceiling.
+// RandString returns a psuedorandom string with the value bounded by ceiling.
 func RandString(ceiling *big.Int) string {
 	rint, err := rand.Int(rand.Reader, ceiling)
 	if err != nil {
@@ -71,81 +77,71 @@ func RandString(ceiling *big.Int) string {
 }
 
 // GoUpdate is run by a goroutine to update the shared hashmap.
-func GoUpdate(info UpdateInfo, sigkill, sigdone chan bool) {
+func GoUpdate(hmap MapInstance, sigkill, sigdone chan bool) {
 	defer waiter.Done()
 	var absent bool
 	var entry string
+	var index interface{}
+	var indexint int
 	flg := false
-	// end condition is flg set to true by self or  by signal on sigkill
+	// end condition is finding solution or signal on sigkill
 	for flg == false {
 		select {
 		case <-sigkill:
 			flg = true
-			return
 		default:
 			// generate random string & check if in first hashmap;
 			// add entry if absent, else look up index
-			entry = RandString(info.ceiling)
-			absent = info.hashmap[0].SetIfAbsent(entry, 0)
+			entry = RandString(hmap.ceiling)
+			absent = hmap.hashmap[0].SetIfAbsent(entry, 0)
 			if absent == false {
-				ind, _ := info.hashmap[0].Get(entry)
-				indint := ind.(int)
-				// Move entry forward a map & then check
-				// if it is a solution
-				info.hashmap[indint+1].Set(entry, true)
-				// Catch out-of-bounds entries
-				if indint+1 < info.cols-1 {
-					info.hashmap[0].Set(entry, indint+1)
+				index, _ = hmap.hashmap[0].Get(entry)
+				indexint = index.(int)
+				// Move entry forward a map
+				hmap.hashmap[indexint+1].Set(entry, true)
+				// Catch out-of-bounds pointers
+				if indexint+1 < hmap.cols-1 {
+					hmap.hashmap[0].Set(entry, indexint+1)
 				}
-				if indint != 0 {
-					info.hashmap[indint].Remove(entry)
+				// Only remove entry if this is not the first collision
+				if indexint != 0 {
+					hmap.hashmap[indexint].Remove(entry)
 				}
-				// Exit condition for solution found
-				if indint+1 == info.cols-1 {
-					if info.debug == true {
+				// Solution found
+				if indexint+1 == hmap.cols-1 {
+					if hmap.debug == true {
 						fmt.Println("Desired collisions found!")
 					}
-					// Check sigkill before broadcasting completion
-					// If first goroutine to finish broadcast & then set flg
-					select {
-					case <-sigkill:
-						flg = true
-						return
-					default:
-						sigdone <- true
-						flg = true
-						return
-					}
+					// Send message that solution is found before terminating
+					sigdone <- true
+					flg = true
 				}
 			}
 		}
 	}
 }
 
-// This version also uses the old multiple-hashmap method vs. a single map.
-
 // Update is the single-threaded hashmap updating function left here for reference.
 func (hmap MapInstance) Update() {
 	// Set integer in first map, and use that as pointer
 	// to most recent position for the entry
-	flg := false
-	absent := false
 	var entry string
+	var absent bool
+	flg := false
 	for flg == false {
 		entry = RandString(hmap.ceiling)
 		absent = hmap.hashmap[0].SetIfAbsent(entry, 0)
 		if absent == false {
 			// We already know an entry exists so can ignore second return value
-			ind, _ := hmap.hashmap[0].Get(entry)
-			// Must cast out of interface{}
-			indint := ind.(int)
-			hmap.hashmap[indint+1].Set(entry, true)
-			hmap.hashmap[0].Set(entry, indint+1)
-			if indint != 0 {
-				hmap.hashmap[indint].Remove(entry)
+			index, _ := hmap.hashmap[0].Get(entry)
+			indexint := index.(int)
+			hmap.hashmap[indexint+1].Set(entry, true)
+			hmap.hashmap[0].Set(entry, indexint+1)
+			if indexint != 0 {
+				hmap.hashmap[indexint].Remove(entry)
 			}
 			// Adjusting for 0-indexing (hmap.hashmap[1] is for double collisions)
-			if indint+1 == hmap.cols-1 {
+			if indexint+1 == hmap.cols-1 {
 				if hmap.debug == true {
 					fmt.Println("Desired collisions found!")
 				}
@@ -158,29 +154,13 @@ func (hmap MapInstance) Update() {
 // Hashmake creates & initializes a MapInstance to be passed to goroutines.
 func Hashmake(diff int, cols int, debug bool) MapInstance {
 	ceiling := new(big.Int).SetInt64(1 << uint(diff))
-	hmap := MapInstance{
-		diff, cols, ceiling, make([]int, cols),
+	hmap := MapInstance{diff, cols, ceiling, make([]int, cols),
 		debug, make([]*cmap.ConcurrentMap, cols)}
 	for i := range hmap.hashmap {
 		temp := cmap.New()
 		hmap.hashmap[i] = &temp
 	}
 	return hmap
-}
-
-// Sum aggregates statistics to pass to Diagnostic.
-func (hmap MapInstance) Sum() int {
-	dubsum := 0
-	for i := range hmap.hashmap {
-		curmap := hmap.hashmap[i]
-		hitcount := curmap.Count()
-		hmap.record[i] = hitcount
-		if i != 0 {
-			dubsum += hitcount
-		}
-	}
-	hmap.record[0] -= dubsum
-	return hmap.Diagnostic()
 }
 
 // Need to write results to file vs. pipe
@@ -192,7 +172,6 @@ var iters int
 var debug bool
 
 func init() {
-	// Defaults are diff 32 cols 3 iters 100 debug false
 	flag.IntVar(&diff, "diff", 32, "Difficulty of the PoW (n)")
 	flag.IntVar(&cols, "cols", 3, "# of Collisions (k)")
 	flag.IntVar(&iters, "iters", 100, "# of iterations per (n, k)")
@@ -210,51 +189,65 @@ var waiter sync.WaitGroup
 
 func main() {
 	flag.Parse()
-	runtime.GOMAXPROCS(runtime.NumCPU())
-	outmap := make(map[int][]int)
-	for i := 1; i < diff+1; i++ {
-		for j := 2; j < cols+1; j++ {
-			key := i*100 + j
-			out := 0.0
-			outcv := 0.0
-			outmap[key] = make([]int, iters)
-			for k := 0; k < iters; k++ {
-				hmap := Hashmake(i, j, debug)
-				waiter.Add(runtime.NumCPU())
-				sigdone := make(chan bool, runtime.NumCPU())
-				sigkill := make(chan bool, runtime.NumCPU())
-				for i := 0; i < runtime.NumCPU(); i++ {
-					mappoint := make([]*cmap.ConcurrentMap, len(hmap.hashmap))
-					copy(mappoint, hmap.hashmap)
-					goinf := UpdateInfo{
-						mappoint, hmap.debug,
-						hmap.cols, hmap.ceiling}
-					go GoUpdate(goinf, sigkill, sigdone)
+	cpucount := runtime.NumCPU()
+	runtime.GOMAXPROCS(cpucount)
+	outputmap := make(map[int][]int)
+	var key int
+	var mean, coeffvar, offset float64
+	var hmap MapInstance
+	var sigkill, sigdone chan bool
+	var hashcount int
+	if iters < 2 {
+		fmt.Println("Cannot calculate coeff. of var. with < 2 iterations.")
+	}
+	for diffindex := 1; diffindex < diff+1; diffindex++ {
+		for colindex := 2; colindex < cols+1; colindex++ {
+			// Implicit limit of 64 for difficulty from size of Int64
+			key = colindex*100 + diffindex
+			mean, coeffvar = 0.0, 0.0
+			outputmap[key] = make([]int, iters)
+			for iterindex := 0; iterindex < iters; iterindex++ {
+				hmap = Hashmake(diffindex, colindex, debug)
+				sigkill, sigdone = make(chan bool, cpucount), make(chan bool, cpucount)
+				waiter.Add(cpucount)
+				for cpuindex := 0; cpuindex < cpucount; cpuindex++ {
+					go GoUpdate(hmap, sigkill, sigdone)
 				}
 				go func() {
 					select {
 					case <-sigdone:
-						for i := 0; i < runtime.NumCPU(); i++ {
+						for cpuindex := 0; cpuindex < cpucount; cpuindex++ {
 							sigkill <- true
 						}
 					}
 				}()
 				waiter.Wait()
-				hashcount := hmap.Sum()
-				outmap[key][k] = hashcount
-				out += float64(hashcount)
+				hashcount = hmap.Sum()
+				outputmap[key][iterindex] = hashcount
+				mean += float64(hashcount)
 			}
-			out = out / float64(iters)
-			for _, val := range outmap[key] {
-				shift := float64(val) - out
-				outcv += shift * shift
+			// Calculate mean, std. dev., and then coeff. of var.
+			mean /= float64(iters)
+			for _, val := range outputmap[key] {
+				offset = float64(val) - mean
+				coeffvar += offset * offset
 			}
-			outcv = outcv / float64(iters)
-			outcv = math.Sqrt(outcv)
-			outcv = outcv / out
-			fmt.Println(key)
-			fmt.Println(out)
-			fmt.Println(outcv)
+			coeffvar /= float64(iters - 1)
+			coeffvar = math.Sqrt(coeffvar)
+			coeffvar /= mean
+			if debug == true {
+				fmt.Println("Collisions + Difficulty: ", key)
+				fmt.Println("Mean # of hashes to solve: ", mean)
+				if iters > 1 {
+					fmt.Println("Coefficient of variation: ", coeffvar)
+				}
+			} else {
+				fmt.Println(key)
+				fmt.Println(mean)
+				if iters > 1 {
+					fmt.Println(coeffvar)
+				}
+			}
 		}
 	}
 }
